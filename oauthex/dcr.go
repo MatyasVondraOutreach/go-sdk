@@ -204,7 +204,9 @@ func RegisterClient(ctx context.Context, registrationEndpoint string, clientMeta
 		return nil, fmt.Errorf("failed to read registration response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusCreated {
+	// Accept both 201 Created (per RFC 7591) and 200 OK, since some
+	// authorization servers (e.g. Amplitude) return 200 for successful registrations.
+	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
 		var regResponse ClientRegistrationResponse
 		if err := internaljson.Unmarshal(body, &regResponse); err != nil {
 			return nil, fmt.Errorf("failed to decode successful registration response: %w (%s)", err, string(body))

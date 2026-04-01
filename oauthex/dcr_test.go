@@ -71,6 +71,18 @@ func TestRegisterClient(t *testing.T) {
 			wantClientID: "test-client-id",
 		},
 		{
+			name: "Success with 200 OK",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				// Some authorization servers (e.g. Amplitude) return 200 OK
+				// instead of 201 Created for successful DCR responses.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"client_id":"ok-client-id","client_secret":"ok-secret","client_name":"Test App"}`))
+			},
+			clientMeta:   &ClientRegistrationMetadata{ClientName: "Test App", RedirectURIs: []string{"http://localhost/cb"}},
+			wantClientID: "ok-client-id",
+		},
+		{
 			name: "Missing ClientID in Response",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
