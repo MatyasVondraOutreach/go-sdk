@@ -217,6 +217,39 @@ func TestGetProtectedResourceMetadata(t *testing.T) {
 			t.Fatal("nil prm")
 		}
 	})
+	t.Run("SuccessWithTrailingSlashResource", func(t *testing.T) {
+		// Server returns resource with trailing slash, caller expects without.
+		// Per RFC 3986, "https://example.com" == "https://example.com/".
+		h := &fakeResourceHandler{resourceOverride: "TRAILING_SLASH"}
+		server := httptest.NewTLSServer(h)
+		h.installHandlers(server.URL)
+		client := server.Client()
+		metadataURL := server.URL + "/.well-known/oauth-protected-resource"
+		// Pass resourceURL without trailing slash.
+		prm, err := GetProtectedResourceMetadata(ctx, metadataURL, server.URL, client)
+		if err != nil {
+			t.Fatalf("expected success with trailing-slash resource, got error: %v", err)
+		}
+		if prm == nil {
+			t.Fatal("nil prm")
+		}
+	})
+	t.Run("SuccessWithoutTrailingSlashResource", func(t *testing.T) {
+		// Server returns resource without trailing slash, caller expects with.
+		h := &fakeResourceHandler{} // returns server.URL (no trailing slash)
+		server := httptest.NewTLSServer(h)
+		h.installHandlers(server.URL)
+		client := server.Client()
+		metadataURL := server.URL + "/.well-known/oauth-protected-resource"
+		// Pass resourceURL with trailing slash.
+		prm, err := GetProtectedResourceMetadata(ctx, metadataURL, server.URL+"/", client)
+		if err != nil {
+			t.Fatalf("expected success with trailing-slash resourceURL, got error: %v", err)
+		}
+		if prm == nil {
+			t.Fatal("nil prm")
+		}
+	})
 	t.Run("RejectsIncorrectResource", func(t *testing.T) {
 		h := &fakeResourceHandler{resourceOverride: "https://attacker.com/evil"}
 		server := httptest.NewTLSServer(h)
@@ -231,11 +264,55 @@ func TestGetProtectedResourceMetadata(t *testing.T) {
 			t.Fatal("Expected nil prm on validation failure")
 		}
 	})
+	t.Run("RejectsDifferentPath", func(t *testing.T) {
+		// Trailing slash normalization must NOT make different paths equivalent.
+		h := &fakeResourceHandler{resourceOverride: "USE_SERVER_URL"} // will be set in installHandlers
+		server := httptest.NewTLSServer(h)
+		h.installHandlers(server.URL)
+		// Override after installHandlers to use a different path.
+		h.resourceOverride = server.URL + "/other"
+		client := server.Client()
+		metadataURL := server.URL + "/.well-known/oauth-protected-resource"
+		prm, err := GetProtectedResourceMetadata(ctx, metadataURL, server.URL+"/api", client)
+		if err == nil {
+			t.Fatal("Expected validation error for different paths, got nil")
+		}
+		if prm != nil {
+			t.Fatal("Expected nil prm on validation failure")
+		}
+	})
 }
 
 type fakeResourceHandler struct {
 	http.ServeMux
 	resourceOverride string // If set, use this instead of correct resource (for testing validation)
+}
+
+func TestResourceURLsEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical", "https://example.com", "https://example.com", true},
+		{"trailing slash vs none", "https://example.com/", "https://example.com", true},
+		{"none vs trailing slash", "https://example.com", "https://example.com/", true},
+		{"both trailing slash", "https://example.com/", "https://example.com/", true},
+		{"different hosts", "https://example.com", "https://other.com", false},
+		{"different paths", "https://example.com/a", "https://example.com/b", false},
+		{"path vs root", "https://example.com/a", "https://example.com", false},
+		{"path with trailing slash", "https://example.com/api/", "https://example.com/api/", true},
+		{"different schemes", "http://example.com", "https://example.com", false},
+		{"with port", "https://example.com:8443/", "https://example.com:8443", true},
+		{"with query", "https://example.com?q=1", "https://example.com/?q=1", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resourceURLsEqual(tt.a, tt.b); got != tt.want {
+				t.Errorf("resourceURLsEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
 }
 
 func (h *fakeResourceHandler) installHandlers(serverURL string) {
@@ -247,7 +324,9 @@ func (h *fakeResourceHandler) installHandlers(serverURL string) {
 		// For the well-known URL test case, it's just the serverURL.
 		resource := serverURL
 		// Allow testing with custom resource values (e.g., impersonation attacks).
-		if h.resourceOverride != "" {
+		if h.resourceOverride == "TRAILING_SLASH" {
+			resource = serverURL + "/"
+		} else if h.resourceOverride != "" {
 			resource = h.resourceOverride
 		}
 		prm := &ProtectedResourceMetadata{Resource: resource}

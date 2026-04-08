@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 
@@ -132,7 +133,10 @@ func GetProtectedResourceMetadata(ctx context.Context, metadataURL, resourceURL 
 		return nil, err
 	}
 	// Validate the Resource field (see RFC 9728, section 3.3).
-	if prm.Resource != resourceURL {
+	// Use URL-aware comparison: per RFC 3986, an empty path and "/" are
+	// equivalent for hierarchical URIs, so "https://example.com" and
+	// "https://example.com/" must be treated as the same resource.
+	if !resourceURLsEqual(prm.Resource, resourceURL) {
 		return nil, fmt.Errorf("got metadata resource %q, want %q", prm.Resource, resourceURL)
 	}
 	// Validate the authorization server URLs to prevent XSS attacks (see #526).
@@ -145,6 +149,32 @@ func GetProtectedResourceMetadata(ctx context.Context, metadataURL, resourceURL 
 		}
 	}
 	return prm, nil
+}
+
+// resourceURLsEqual reports whether a and b refer to the same resource URL.
+// Per RFC 3986 §6.2.3, the path "/" is equivalent to an empty path for
+// hierarchical URIs, so "https://example.com" and "https://example.com/"
+// are considered equal. All other path differences are significant.
+func resourceURLsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ua, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	ub, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	// Normalize: treat empty path and "/" as equivalent.
+	if ua.Path == "" {
+		ua.Path = "/"
+	}
+	if ub.Path == "" {
+		ub.Path = "/"
+	}
+	return ua.String() == ub.String()
 }
 
 // ParseWWWAuthenticate parses a WWW-Authenticate header string.
