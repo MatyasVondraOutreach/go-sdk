@@ -154,7 +154,8 @@ func GetProtectedResourceMetadata(ctx context.Context, metadataURL, resourceURL 
 // resourceURLsEqual reports whether a and b refer to the same resource URL.
 // Per RFC 3986 §6.2.3, the path "/" is equivalent to an empty path for
 // hierarchical URIs, so "https://example.com" and "https://example.com/"
-// are considered equal. All other path differences are significant.
+// are considered equal. A trailing slash on any path is also ignored, so
+// "https://example.com/mcp" and "https://example.com/mcp/" are equal.
 func resourceURLsEqual(a, b string) bool {
 	if a == b {
 		return true
@@ -167,13 +168,10 @@ func resourceURLsEqual(a, b string) bool {
 	if err != nil {
 		return false
 	}
-	// Normalize: treat empty path and "/" as equivalent.
-	if ua.Path == "" {
-		ua.Path = "/"
-	}
-	if ub.Path == "" {
-		ub.Path = "/"
-	}
+	// Normalize: strip trailing slashes (covers both empty-path vs "/"
+	// and "/mcp" vs "/mcp/" cases).
+	ua.Path = strings.TrimRight(ua.Path, "/")
+	ub.Path = strings.TrimRight(ub.Path, "/")
 	return ua.String() == ub.String()
 }
 
