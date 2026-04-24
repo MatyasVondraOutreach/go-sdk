@@ -14,6 +14,27 @@ import (
 	"net/http"
 )
 
+// IssuerMismatchError is returned by [GetAuthServerMeta] when the fetched
+// metadata document is otherwise valid but the issuer field does not match
+// the expected issuer URL (RFC 8414, section 3.3).
+//
+// Callers that wish to use the metadata despite the mismatch (e.g. when a
+// proxy serves ASM on behalf of a different issuer) can extract the parsed
+// metadata from the Meta field.
+type IssuerMismatchError struct {
+	// Expected is the issuer URL that was expected (passed to GetAuthServerMeta).
+	Expected string
+	// Got is the issuer URL found in the metadata document.
+	Got string
+	// Meta is the parsed metadata document. All validations other than the
+	// issuer check (PKCE support, URL scheme safety) have passed.
+	Meta *AuthServerMeta
+}
+
+func (e *IssuerMismatchError) Error() string {
+	return fmt.Sprintf("metadata issuer %q does not match issuer URL %q", e.Got, e.Expected)
+}
+
 // AuthServerMeta represents the metadata for an OAuth 2.0 authorization server,
 // as defined in [RFC 8414].
 //
@@ -145,11 +166,6 @@ func GetAuthServerMeta(ctx context.Context, metadataURL, issuer string, c *http.
 		}
 		return nil, fmt.Errorf("%v", err) // Do not expose error types.
 	}
-	if asm.Issuer != issuer {
-		// Validate the Issuer field (see RFC 8414, section 3.3).
-		return nil, fmt.Errorf("metadata issuer %q does not match issuer URL %q", asm.Issuer, issuer)
-	}
-
 	if len(asm.CodeChallengeMethodsSupported) == 0 {
 		return nil, fmt.Errorf("authorization server at %s does not implement PKCE", issuer)
 	}
@@ -157,6 +173,13 @@ func GetAuthServerMeta(ctx context.Context, metadataURL, issuer string, c *http.
 	// Validate endpoint URLs to prevent XSS attacks (see #526).
 	if err := validateAuthServerMetaURLs(asm); err != nil {
 		return nil, err
+	}
+
+	if asm.Issuer != issuer {
+		// Validate the Issuer field (see RFC 8414, section 3.3).
+		// Return the parsed metadata alongside the error so callers can
+		// decide whether to use it despite the mismatch (e.g. proxied ASM).
+		return nil, &IssuerMismatchError{Expected: issuer, Got: asm.Issuer, Meta: asm}
 	}
 
 	return asm, nil
