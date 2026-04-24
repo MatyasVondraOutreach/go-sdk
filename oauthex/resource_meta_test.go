@@ -304,6 +304,9 @@ func TestResourceURLsEqual(t *testing.T) {
 		{"path with trailing slash", "https://example.com/api/", "https://example.com/api/", true},
 		{"different schemes", "http://example.com", "https://example.com", false},
 		{"with port", "https://example.com:8443/", "https://example.com:8443", true},
+		{"path trailing slash vs none", "https://example.com/mcp/", "https://example.com/mcp", true},
+		{"path none vs trailing slash", "https://example.com/mcp", "https://example.com/mcp/", true},
+		{"deep path trailing slash", "https://example.com/api/v1/", "https://example.com/api/v1", true},
 		{"with query", "https://example.com?q=1", "https://example.com/?q=1", true},
 	}
 	for _, tt := range tests {
