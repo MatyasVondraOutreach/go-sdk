@@ -7,6 +7,7 @@ package oauthex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -115,5 +116,77 @@ func TestGetAuthServerMetaPKCESupport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetAuthServerMetaIssuerMismatch(t *testing.T) {
+	ctx := context.Background()
+
+	// Start a fake server whose ASM document has a different issuer
+	// (simulating a proxy in front of Okta, like ZoomInfo).
+	wrapper := http.NewServeMux()
+	realIssuer := "https://okta-login.example.com/oauth2/default"
+	wrapper.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		u, _ := url.Parse("https://" + r.Host)
+		proxyBase := "https://localhost:" + u.Port()
+		metadata := AuthServerMeta{
+			Issuer:                            realIssuer,
+			AuthorizationEndpoint:             proxyBase + "/oauth/authorize",
+			TokenEndpoint:                     realIssuer + "/v1/token",
+			RegistrationEndpoint:              proxyBase + "/oauth/register",
+			JWKSURI:                           realIssuer + "/v1/keys",
+			ResponseTypesSupported:            []string{"code"},
+			GrantTypesSupported:               []string{"authorization_code"},
+			TokenEndpointAuthMethodsSupported: []string{"client_secret_basic"},
+			CodeChallengeMethodsSupported:     []string{"S256"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(metadata)
+	})
+	ts := httptest.NewTLSServer(wrapper)
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	proxyIssuer := "https://localhost:" + u.Port()
+	metadataURL := proxyIssuer + "/.well-known/oauth-authorization-server"
+
+	httpClient := ts.Client()
+	if tr, ok := httpClient.Transport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.TLSClientConfig.ServerName = "example.com"
+		httpClient.Transport = clone
+	}
+
+	meta, err := GetAuthServerMeta(ctx, metadataURL, proxyIssuer, httpClient)
+	if err == nil {
+		t.Fatal("expected IssuerMismatchError, got nil")
+	}
+
+	var mismatchErr *IssuerMismatchError
+	if !errors.As(err, &mismatchErr) {
+		t.Fatalf("expected IssuerMismatchError, got %T: %v", err, err)
+	}
+
+	if mismatchErr.Expected != proxyIssuer {
+		t.Errorf("Expected = %q, want %q", mismatchErr.Expected, proxyIssuer)
+	}
+	if mismatchErr.Got != realIssuer {
+		t.Errorf("Got = %q, want %q", mismatchErr.Got, realIssuer)
+	}
+	if mismatchErr.Meta == nil {
+		t.Fatal("Meta is nil, want parsed metadata")
+	}
+	if meta != nil {
+		t.Error("return value should be nil on issuer mismatch")
+	}
+
+	// Verify the metadata is fully populated despite the mismatch.
+	if mismatchErr.Meta.RegistrationEndpoint != proxyIssuer+"/oauth/register" {
+		t.Errorf("RegistrationEndpoint = %q, want %q",
+			mismatchErr.Meta.RegistrationEndpoint, proxyIssuer+"/oauth/register")
+	}
+	if mismatchErr.Meta.TokenEndpoint != realIssuer+"/v1/token" {
+		t.Errorf("TokenEndpoint = %q, want %q",
+			mismatchErr.Meta.TokenEndpoint, realIssuer+"/v1/token")
 	}
 }
